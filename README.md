@@ -25,6 +25,7 @@ dots.tts achieves the best average performance on **Seed-TTS-Eval**, with WERs o
 
 - [Quick Start](#-quick-start)
   - [Installation](#installation)
+  - [Checkpoints](#checkpoints)
   - [CLI](#cli)
   - [Python API](#python-api)
   - [Web Demo (Gradio)](#web-demo-gradio)
@@ -71,31 +72,46 @@ The constraints file pins the recommended versions. To use other compatible
 versions, omit `-c constraints/recommended.txt`; the compatibility ranges are
 declared in `pyproject.toml`.
 
+### Checkpoints
+
+Three pretrained checkpoints are released on Hugging Face. All three share the same backbone — choose by the quality / inference-cost tradeoff:
+
+| Model | Description | Recommended `--num-steps` |
+|---|---|:---:|
+| [`rednote-hilab/dots.tts-base`](https://huggingface.co/rednote-hilab/dots.tts-base) | Pretrained checkpoint. | `10`–`32` (default `10`) |
+| [`rednote-hilab/dots.tts-soar`](https://huggingface.co/rednote-hilab/dots.tts-soar) | Self-corrective-aligned (SCA) checkpoint on top of `dots.tts-base`. Best voice cloning performance. | `10`–`32` (default `10`) |
+| [`rednote-hilab/dots.tts-mf`](https://huggingface.co/rednote-hilab/dots.tts-mf) | MeanFlow-distilled student from `dots.tts-soar`. Recommended if you care about inference speed. | `4` |
+
+Pass the repo id directly to `--model-name-or-path` (or `DotsTtsRuntime.from_pretrained`) — the snapshot is fetched on first use and cached locally.
+
 ### CLI
 
 The package installs a `dots.tts` entry point:
 
 ```bash
-# Continuation voice cloning (reference audio + transcript) — recommended
+# Continuation voice cloning (reference audio + transcript) — recommended, best SIM
 dots.tts \
-  --model-name-or-path /path/to/dots_tts_model \
+  --model-name-or-path rednote-hilab/dots.tts-soar \
   --text "Hello, this is a zero-shot voice cloning demonstration." \
   --prompt-audio /path/to/reference.wav \
   --prompt-text "The exact transcript of the reference audio." \
+  --num-steps 10 \
   --output clone.wav
 
 # X-vector-only voice cloning (reference audio only — timbre from speaker x-vector)
 dots.tts \
-  --model-name-or-path /path/to/dots_tts_model \
+  --model-name-or-path rednote-hilab/dots.tts-soar \
   --text "Hello, this is a zero-shot voice cloning demonstration." \
   --prompt-audio /path/to/reference.wav \
+  --num-steps 10 \
   --output clone.wav
 
 # Random-voice sampling (no reference) — only meaningful with a fine-tuned
 # single-speaker checkpoint
 dots.tts \
-  --model-name-or-path /path/to/dots_tts_model \
+  --model-name-or-path rednote-hilab/dots.tts-soar \
   --text "Hello, this is a quick speech synthesis test." \
+  --num-steps 10 \
   --output output.wav
 ```
 
@@ -104,7 +120,7 @@ Common flags:
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--num-steps` | Flow-matching sampling steps (higher = better quality, lower = faster) | `10` |
-| `--guidance-scale` | CFG scale (flow-matching only; MeanFlow has CFG fused into the student; values > 2 progressively amplify audio energy) | `1.0` |
+| `--guidance-scale` | CFG scale (flow-matching only; MeanFlow has CFG fused into the student; values > 2 progressively amplify audio energy) | `1.2` |
 | `--normalize-text` | Apply text normalization before inference (via [WeTextProcessing](https://github.com/wenet-e2e/WeTextProcessing)) | off |
 | `--language` | Add an explicit language tag to the input text; accepts `none`, `auto_detect`, language codes such as `EN` / `ZH`, or names such as `english` / `chinese` | `none` |
 | `--seed` | RNG seed (fixed seed → deterministic output) | `42` |
@@ -117,6 +133,14 @@ Notes:
 - `--language` is useful for multilingual or code-switched text when you want to force the model-side language tag. For example, pass `--language EN` for English, `--language ZH` for Mandarin, `--language Cantonese` for Cantonese, or `--language auto_detect` to infer the tag from `--text`.
 - Pass either a local model directory or a Hugging Face repo id.
 
+Tips for voice cloning:
+
+- **Keep the reference audio around 10s**. Longer audio won't yield better results.
+- **`--prompt-text` should match what's actually spoken in the reference audio**. Mismatches degrade stability and may cause word-level errors.
+- **Higher-quality references give better clones** — prefer a high sample rate, low background noise, no trailing noise, and natural-sounding speech.
+- **Try different `--seed` values for prosody variation**. Each seed produces a different rhythm and intonation — resample a few times if the default doesn't feel right.
+- **Increase `--num-steps` if quality isn't good enough**. More sampling steps trade compute for cleaner output and better expressiveness.
+
 ### Python API
 
 ```python
@@ -124,7 +148,7 @@ from dots_tts.runtime import DotsTtsRuntime
 import soundfile as sf
 
 runtime = DotsTtsRuntime.from_pretrained(
-    "/path/to/dots_tts_model",
+    "rednote-hilab/dots.tts-soar",
     precision="bfloat16",
     optimize=True,  # torch.compile acceleration (warmup at load, faster steady-state)
 )
@@ -134,28 +158,43 @@ result = runtime.generate(
     prompt_audio_path="/path/to/reference.wav",
     prompt_text="The exact transcript of the reference audio.",
     num_steps=10,
-    guidance_scale=1.0,
+    guidance_scale=1.2,
 )
 
 sf.write("output.wav", result["audio"].float().cpu().squeeze().numpy(), result["sample_rate"])
+```
+
+For low-latency playback or streaming to a client, use `generate_stream` instead — it yields audio chunks (`torch.Tensor`, shape `(1, samples)`) as they are produced. Arguments are identical to `generate`:
+
+```python
+import torch
+
+stream = runtime.generate_stream(
+    text="Hello, this is a streaming speech synthesis test.",
+    prompt_audio_path="/path/to/reference.wav",
+    prompt_text="The exact transcript of the reference audio.",
+    num_steps=10,
+    guidance_scale=1.2,
+)
+
+chunks = []
+for chunk in stream:
+    chunks.append(chunk.detach().float().cpu())
+    # handle_chunk(chunk)  # push to a player / websocket / etc.
+
+audio = torch.cat(chunks, dim=-1).squeeze().numpy()
+sf.write("output_stream.wav", audio, runtime.sample_rate)
 ```
 
 ### Web Demo (Gradio)
 
 ```bash
 python apps/gradio/app.py \
-  --model-name-or-path /path/to/dots_tts_model \
+  --model-name-or-path rednote-hilab/dots.tts-soar \
   --optimize
 ```
 
 Defaults to `http://0.0.0.0:7860`. With `--optimize` the first launch runs warmup (slower startup, faster steady-state).
-
-Common flags:
-
-- `--host` / `--port` / `--execution-mode` / `--optimize`
-- `--model-name-or-path` / `--output-dir` / `--log-file`
-
-The model, execution mode, precision, optimize flag, and max generation length are fixed at startup — changing any of them requires restarting the server.
 
 ### Fine-tuning
 
