@@ -6,21 +6,26 @@ from typing import Literal
 
 from langcodes import Language as LangcodesLanguage
 from lingua import Language, LanguageDetectorBuilder
-from tn.chinese.normalizer import Normalizer as ZhNormalizer
-from tn.english.normalizer import Normalizer as EnNormalizer
-
 TextLanguage = Literal["zh", "en", "unknown"]
 
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 
 
+# NOTE (Skill45 pilot): the `tn` (WeTextProcessing) imports are LAZY — moved inside
+# these factories so importing the runtime/CLI doesn't require pynini/OpenFst, which
+# is impractical to build on native Windows. `tn` is only needed if you actually call
+# text normalization (--normalize-text), which we don't use.
 @lru_cache(maxsize=1)
-def get_chinese_text_normalizer() -> ZhNormalizer:
+def get_chinese_text_normalizer():
+    from tn.chinese.normalizer import Normalizer as ZhNormalizer
+
     return ZhNormalizer()
 
 
 @lru_cache(maxsize=1)
-def get_english_text_normalizer() -> EnNormalizer:
+def get_english_text_normalizer():
+    from tn.english.normalizer import Normalizer as EnNormalizer
+
     return EnNormalizer()
 
 

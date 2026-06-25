@@ -52,7 +52,9 @@ dependencies = [
     "torchdiffeq",
     "tqdm",
     "lingua-language-detector",
-    "WeTextProcessing",
+    # WeTextProcessing removed for the Windows pilot — it pulls pynini/OpenFst, which is
+    # impractical to build on native Windows. Only needed for optional --normalize-text;
+    # the tn import is lazy (see utils/text.py). Re-add it if you need text normalization.
 ]
 
 [project.optional-dependencies]
